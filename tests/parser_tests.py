@@ -842,3 +842,85 @@ class DateTimeParserSearchDateTests(Chai):
         assertEqual(
             self.parser.parse("Dec 31, 2017 |^${}().*+?<>-& 2:00 AM", format),
             datetime(2017, 12, 31, 2, 0))
+
+class DateTimeParserGuessTests(Chai):
+    def setUp(self):
+        super(DateTimeParserGuessTests, self).setUp()
+        self.parser = parser.DateTimeParser(default_datetime=datetime(2018, 4, 17))
+
+    def test_parse_guess(self):
+        utc = tz.tzoffset(None, 0)
+        tz_ny = tz.tzoffset(None, -3600 * 5)
+        tz_la = tz.tzoffset(None, -3600 * 8)
+        tz_jp = tz.tzoffset(None, +3600 * 9)
+        assertEqual(self.parser.parse_guess('November 18th, 1994'), datetime(1994, 11, 18))
+        assertEqual(self.parser.parse_guess('nov 18 1994'), datetime(1994, 11, 18))
+        assertEqual(self.parser.parse_guess('11-18-94'), datetime(1994, 11, 18))
+        assertEqual(self.parser.parse_guess('11-18-1994'), datetime(1994, 11, 18))
+        assertEqual(self.parser.parse_guess('1994-11-18'), datetime(1994, 11, 18))
+        assertEqual(self.parser.parse_guess('November 18, 1994'), datetime(1994, 11, 18))
+        assertEqual(self.parser.parse_guess('18/11/94'), datetime(1994, 11, 18))
+        assertEqual(self.parser.parse_guess('25'), datetime(2018, 4, 25))
+        assertEqual(self.parser.parse_guess('4/2/93'), datetime(1993, 4, 2))
+        assertEqual(self.parser.parse_guess('04-02-1993'), datetime(1993, 4, 2))
+        assertEqual(self.parser.parse_guess('4-02-93'), datetime(1993, 4, 2))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993'), datetime(1993, 4, 2))
+        assertEqual(self.parser.parse_guess('15-Jan 99'), datetime(1999, 1, 15))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993 22:18:04'), datetime(1993,4,2,22,18,4))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993 1-15'), datetime(1993,4,2,1,15,0))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993 4 23 3'), datetime(1993,4,2,4,23,3))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993 8pm'), datetime(1993,4,2,20,0,0))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993 22:18:04 UTC'),
+                    datetime(1993,4,2,22,18,4,tzinfo=utc))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993 22:18:04 America/New_York'),
+                    datetime(1993,4,2,22,18,4,tzinfo=tz_ny))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993 22:18:04 America/Los_Angeles'),
+                    datetime(1993,4,2,22,18,4,tzinfo=tz_la))
+        assertEqual(self.parser.parse_guess('April 2nd, 1993 22:18:04 Japan'),
+                    datetime(1993,4,2,22,18,4,tzinfo=tz_jp))
+
+    def test_parse_iso_dates(self):
+        assertEqual(self.parser.parse_guess('2013-02-03T04:05:06.7891+01:00'),
+                    datetime(2013, 2, 3, 4, 5, 6, 789100, tzinfo=tz.tzoffset(None, 3600)))
+        assertEqual(self.parser.parse_guess('2013-02-03T04:05:06.7891-01:00'),
+                    datetime(2013, 2, 3, 4, 5, 6, 789100, tzinfo=tz.tzoffset(None, -3600)))
+        assertEqual(self.parser.parse_guess('2013-02-03 04:05+01:00'),
+                    datetime(2013, 2, 3, 4, 5, 0, tzinfo=tz.tzoffset(None, 3600)))
+        assertEqual(self.parser.parse_guess('2013-01-01 12:30:45.9'),
+                    datetime(2013, 1, 1, 12, 30, 45, 900000))
+        assertEqual(self.parser.parse_guess('2013-01-01 12:30:45.98765'),
+                    datetime(2013, 1, 1, 12, 30, 45, 987650))
+
+    def test_parse_incomplete_dates(self):
+        assertEqual(self.parser.parse_guess('25'), datetime(2018, 4, 25))
+        assertEqual(self.parser.parse_guess('2/5'), datetime(2018, 2, 5))
+        assertEqual(self.parser.parse_guess('2-15'), datetime(2018, 2, 15))
+        assertEqual(self.parser.parse_guess('15-2'), datetime(2018, 2, 15))
+        assertEqual(self.parser.parse_guess('2015'), datetime(2015, 1, 1))
+        assertEqual(self.parser.parse_guess('2015-12'), datetime(2015, 12, 1))
+        assertEqual(self.parser.parse_guess('2015-12-8'), datetime(2015, 12, 8))
+        assertEqual(self.parser.parse_guess('Tuesday March 2'), datetime(2018, 3, 2))
+
+    def test_parse_times(self):
+        assertEqual(self.parser.parse_guess('5:25'), datetime(2018, 4, 17, 5, 25))
+        assertEqual(self.parser.parse_guess('5:25pm'), datetime(2018, 4, 17, 17, 25))
+        assertEqual(self.parser.parse_guess('17:25'), datetime(2018, 4, 17, 17, 25))
+        assertEqual(self.parser.parse_guess('17:25PM'), datetime(2018, 4, 17, 17, 25))
+        assertEqual(self.parser.parse_guess('5PM'), datetime(2018, 4, 17, 17, 0))
+        assertEqual(self.parser.parse_guess('5am'), datetime(2018, 4, 17, 5, 0))
+        assertEqual(self.parser.parse_guess('12am'), datetime(2018, 4, 17, 0, 0))
+        assertEqual(self.parser.parse_guess('0:0'), datetime(2018, 4, 17, 0, 0))
+
+    def test_failure(self):
+        with assertRaises(ParserError):
+            self.parser.parse_guess('2015 2am')
+        with assertRaises(ParserError):
+            self.parser.parse_guess('Boosday Morch 2')
+
+    def test_us_date_string(self):
+        tz_la = tz.tzoffset(None, -3600 * 7)
+        assertEqual(self.parser.parse_guess('Mon Sep 28 1998 14:36:22 GMT-0700'),
+                    datetime(1998, 9, 28, 14, 36, 22, tzinfo=tz_la))
+        # TODO This fails because arrow doesn't recognize this type of time zone.
+        #assertEqual(self.parser.parse_guess('Mon Sep 28 1998 14:36:22 GMT-0700 (PDT)'),
+        #            datetime(1998, 9, 28, 14, 36, 22, tzinfo=tz_la))

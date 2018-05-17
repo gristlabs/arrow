@@ -27,7 +27,7 @@ class DateTimeParser(object):
     _ONE_OR_TWO_DIGIT_RE = re.compile('\d{1,2}')
     _FOUR_DIGIT_RE = re.compile('\d{4}')
     _TWO_DIGIT_RE = re.compile('\d{2}')
-    _TZ_RE = re.compile('[+\-]?\d{2}:?(\d{2})?')
+    _TZ_RE = re.compile('[+\-]\d{2}:?(\d{2})?')
     _TZ_NAME_RE = re.compile('\w[\w+\-/]+')
 
 
@@ -56,9 +56,10 @@ class DateTimeParser(object):
     MARKERS = ['YYYY', 'MM', 'DD']
     SEPARATORS = ['-', '/', '.']
 
-    def __init__(self, locale='en_us', cache_size=0):
+    def __init__(self, locale='en_us', cache_size=0, default_datetime=datetime(1, 1, 1)):
 
         self.locale = locales.get_locale(locale)
+        self._default_datetime = default_datetime
         self._input_re_map = self._BASE_INPUT_RE_MAP.copy()
         self._input_re_map.update({
             'MMMM': self._choice_re(self.locale.month_names[1:], re.IGNORECASE),
@@ -76,6 +77,7 @@ class DateTimeParser(object):
             # ensure backwards compatibility of this token
             'A': self._choice_re(self.locale.meridians.values())
         })
+        self._guess_patterns = []
         if cache_size > 0:
             self._generate_pattern_re =\
                 lru_cache(maxsize=cache_size)(self._generate_pattern_re)
@@ -119,26 +121,40 @@ class DateTimeParser(object):
         return self._parse_multiformat(string, formats)
 
     def _generate_pattern_re(self, fmt):
-
         # fmt is a string of tokens like 'YYYY-MM-DD'
         # we construct a new string by replacing each
         # token by its pattern:
         # 'YYYY-MM-DD' -> '(?P<YYYY>\d{4})-(?P<MM>\d{2})-(?P<DD>\d{2})'
-        tokens = []
-        offset = 0
 
         # Escape all special RegEx chars
         escaped_fmt = re.escape(fmt)
 
         # Extract the bracketed expressions to be reinserted later.
         escaped_fmt = re.sub(self._ESCAPE_RE, "#", escaped_fmt)
-        # Any number of S is the same as one.
-        escaped_fmt = re.sub('S+', 'S', escaped_fmt)
         escaped_data = re.findall(self._ESCAPE_RE, fmt)
 
-        fmt_pattern = escaped_fmt
+        tokens, fmt_pattern = self._generate_pattern_unescaped(escaped_fmt)
 
-        for m in self._FORMAT_RE.finditer(escaped_fmt):
+        # Restore the bracketed parts.
+        final_fmt_pattern = ""
+        a = fmt_pattern.split("\#")
+        b = escaped_data
+
+        # Due to the way Python splits, 'a' will always be longer
+        for i in range(len(a)):
+            final_fmt_pattern += a[i]
+            if i < len(b):
+                final_fmt_pattern += b[i][1:-1]
+
+        return tokens, re.compile(final_fmt_pattern, flags=re.IGNORECASE)
+
+    def _generate_pattern_unescaped(self, escaped_fmt):
+        tokens = []
+        offset = 0
+
+        # Any number of S is the same as one.
+        fmt_pattern = re.sub('S+', 'S', escaped_fmt)
+        for m in self._FORMAT_RE.finditer(fmt_pattern):
             token = m.group(0)
             try:
                 input_re = self._input_re_map[token]
@@ -153,17 +169,7 @@ class DateTimeParser(object):
             fmt_pattern = fmt_pattern[:m.start() + offset] + input_pattern + fmt_pattern[m.end() + offset:]
             offset += len(input_pattern) - (m.end() - m.start())
 
-        final_fmt_pattern = ""
-        a = fmt_pattern.split("\#")
-        b = escaped_data
-
-        # Due to the way Python splits, 'a' will always be longer
-        for i in range(len(a)):
-            final_fmt_pattern += a[i]
-            if i < len(b):
-                final_fmt_pattern += b[i][1:-1]
-
-        return tokens, re.compile(final_fmt_pattern, flags=re.IGNORECASE)
+        return tokens, fmt_pattern
 
     def parse(self, string, fmt):
 
@@ -176,14 +182,56 @@ class DateTimeParser(object):
         if match is None:
             raise ParserError('Failed to match \'{0}\' when parsing \'{1}\''
                               .format(fmt_pattern_re.pattern, string))
+        return self._finish_parse(fmt_tokens, match)
+
+    def _finish_parse(self, fmt_tokens, match):
         parts = {}
         for token in fmt_tokens:
             if token == 'Do':
                 value = match.group('value')
             else:
                 value = match.group(token)
-            self._parse_token(token, value, parts)
-        return self._build_datetime(parts)
+            if value is not None:
+                self._parse_token(token, value, parts)
+        return self._build_datetime(parts, self._default_datetime)
+
+    # Patterns for guessing dates. These are used without escaping. They combine multiple
+    # patterns. An important restriction is that each name must only appear once in a pattern.
+    _TIME_PATTERN = 'H(::m(::s(.S)?)?(A)?|a)( )?(Z|ZZZ)?'
+    _MAYBE_TIME_PATTERN = '(( |T){})?'.format(_TIME_PATTERN)
+    _GUESS_PATTERNS = [
+        'YYYY//M(//D)?{}'.format(_MAYBE_TIME_PATTERN),
+        'M//D(//(YYYY|YY))?{}'.format(_MAYBE_TIME_PATTERN),
+        'D//M(//(YYYY|YY))?{}'.format(_MAYBE_TIME_PATTERN),
+        '((ddd|dddd) )?(MMM|MMMM) (D|Do)( (YYYY|YY))?{}'.format(_MAYBE_TIME_PATTERN),
+        '(D|Do) (MMM|MMMM)( (YYYY|YY))?{}'.format(_MAYBE_TIME_PATTERN),
+        _TIME_PATTERN,
+        'YYYY',
+        'D'
+    ]
+
+    def parse_guess(self, string):
+        # TODO Somehow we want to also return a pattern that can parse the same date using
+        # .parse(), but that's not always possible (with spaces, optional parts, anchors).
+        if not self._guess_patterns:
+            for pattern in self._GUESS_PATTERNS:
+                fmt_tokens, fmt_pattern_re = self._generate_pattern_unescaped(pattern)
+                fmt_pattern_re = r'^\s*{}\s*$'.format(fmt_pattern_re
+                                                      .replace(' ', r'\W+')
+                                                      .replace('//', r'\s*[-/\s]\s*')
+                                                      .replace('::', r'\s*[-:\s]\s*'))
+                self._guess_patterns.append(
+                    (fmt_tokens, re.compile(fmt_pattern_re, flags=re.IGNORECASE)))
+
+        for (fmt_tokens, fmt_re) in self._guess_patterns:
+            match = fmt_re.search(string)
+            if match:
+                try:
+                    return self._finish_parse(fmt_tokens, match)
+                except Exception as e:
+                    pass
+        raise ParserError('Failed to match any format when parsing \'{}\''.format(string))
+
 
     def _parse_token(self, token, value, parts):
 
@@ -250,7 +298,7 @@ class DateTimeParser(object):
                 parts['am_pm'] = 'pm'
 
     @staticmethod
-    def _build_datetime(parts):
+    def _build_datetime(parts, default_datetime):
 
         timestamp = parts.get('timestamp')
 
@@ -266,8 +314,11 @@ class DateTimeParser(object):
         elif am_pm == 'am' and hour == 12:
             hour = 0
 
-        return datetime(year=parts.get('year', 1), month=parts.get('month', 1),
-            day=parts.get('day', 1), hour=hour, minute=parts.get('minute', 0),
+        year = parts.get('year', default_datetime.year)
+        month = parts.get('month', default_datetime.month if 'year' not in parts else 1)
+        day = parts.get('day', default_datetime.day if 'year' not in parts and 'month' not in parts else 1)
+        return datetime(year=year, month=month, day=day,
+            hour=hour, minute=parts.get('minute', 0),
             second=parts.get('second', 0), microsecond=parts.get('microsecond', 0),
             tzinfo=parts.get('tzinfo'))
 
