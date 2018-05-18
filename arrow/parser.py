@@ -197,7 +197,7 @@ class DateTimeParser(object):
 
     # Patterns for guessing dates. These are used without escaping. They combine multiple
     # patterns. An important restriction is that each name must only appear once in a pattern.
-    _TIME_PATTERN = 'H(::m(::s(.S)?)?(A)?|a)( )?(Z|ZZZ)?'
+    _TIME_PATTERN = 'H(::m(::s(.S)?)?(--A)?|--a)(--Z| ZZZ)?'
     _MAYBE_TIME_PATTERN = '(( |T){})?'.format(_TIME_PATTERN)
     _GUESS_PATTERNS = [
         'YYYY//M(//D)?{}'.format(_MAYBE_TIME_PATTERN),
@@ -218,6 +218,7 @@ class DateTimeParser(object):
                 fmt_tokens, fmt_pattern_re = self._generate_pattern_unescaped(pattern)
                 fmt_pattern_re = r'^\s*{}\s*$'.format(fmt_pattern_re
                                                       .replace(' ', r'\W+')
+                                                      .replace('--', r'\W*?')
                                                       .replace('//', r'\s*[-/\s]\s*')
                                                       .replace('::', r'\s*[-:\s]\s*'))
                 self._guess_patterns.append(

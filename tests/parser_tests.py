@@ -878,6 +878,12 @@ class DateTimeParserGuessTests(Chai):
                     datetime(1993,4,2,22,18,4,tzinfo=tz_la))
         assertEqual(self.parser.parse_guess('April 2nd, 1993 22:18:04 Japan'),
                     datetime(1993,4,2,22,18,4,tzinfo=tz_jp))
+        assertEqual(self.parser.parse_guess('2018-02-27 16:08:39 -0100'),
+                    datetime(2018,2,27,16,8,39,tzinfo=tz.tzoffset(None, -3600)))
+        assertEqual(self.parser.parse_guess('2018-02-27 16:08:39 +0000'),
+                    datetime(2018,2,27,16,8,39,tzinfo=utc))
+        assertEqual(self.parser.parse_guess('2018-02-27 16:08:39 +0100'),
+                    datetime(2018,2,27,16,8,39,tzinfo=tz.tzoffset(None, +3600)))
 
     def test_parse_iso_dates(self):
         assertEqual(self.parser.parse_guess('2013-02-03T04:05:06.7891+01:00'),
@@ -906,9 +912,12 @@ class DateTimeParserGuessTests(Chai):
         assertEqual(self.parser.parse_guess('5:25pm'), datetime(2018, 4, 17, 17, 25))
         assertEqual(self.parser.parse_guess('17:25'), datetime(2018, 4, 17, 17, 25))
         assertEqual(self.parser.parse_guess('17:25PM'), datetime(2018, 4, 17, 17, 25))
+        assertEqual(self.parser.parse_guess('17:25 Pm'), datetime(2018, 4, 17, 17, 25))
         assertEqual(self.parser.parse_guess('5PM'), datetime(2018, 4, 17, 17, 0))
+        assertEqual(self.parser.parse_guess('5 PM'), datetime(2018, 4, 17, 17, 0))
         assertEqual(self.parser.parse_guess('5am'), datetime(2018, 4, 17, 5, 0))
         assertEqual(self.parser.parse_guess('12am'), datetime(2018, 4, 17, 0, 0))
+        assertEqual(self.parser.parse_guess('12/am'), datetime(2018, 4, 17, 0, 0))
         assertEqual(self.parser.parse_guess('0:0'), datetime(2018, 4, 17, 0, 0))
 
     def test_failure(self):
